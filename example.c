@@ -194,7 +194,7 @@ void swap_cells(LOGIC_CELL *c1, LOGIC_CELL *c2) {
 #ifdef DEBUG
     printf("Swapped LOGIC_CELL %d from (%d, %d) to (%d, %d)\n", c1->id, c1_col, c1_row, c1->col, c1->row);
     printf("Swapped LOGIC_CELL %d from (%d, %d) to (%d, %d)\n", c2->id, c2_col, c2_row, c2->col, c2->row);
-
+#endif
 }
 
 
@@ -243,7 +243,7 @@ int calculate_cost() {
         }
 
         // Go through all the sink cells of this net
-        for (int i = 0; i < net->num_logic_blocks - 1; i++) {
+        for (int i = 0; i < cur->num_logic_blocks - 1; i++) {
             LOGIC_CELL *c = cur->sink_cell[i];
             int col = c->col;
             int row = c->row;
@@ -262,6 +262,11 @@ int calculate_cost() {
         printf("Total cost: %d\n", total_cost);
 #endif
     }
+    return total_cost;
+}
+
+float std_dev(int *vals) {
+    return 0;
 }
 
 void run_init_temp() {
@@ -273,8 +278,8 @@ void run_init_temp() {
     for (int i = 0; i < NUM_INIT_ITERATIONS; i++) {
         // Find 2 random cells to swap
         find_random_cells(&c1, &c2);
-        LOGIC_CELL *cell1 = logic_cells[c1];
-        LOGIC_CELL *cell2 = logic_cells[c2];
+        LOGIC_CELL *cell1 = &logic_cells[c1];
+        LOGIC_CELL *cell2 = &logic_cells[c2];
 
         // Swap the two cells
         swap_cells(cell1, cell2);
