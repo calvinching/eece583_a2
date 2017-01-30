@@ -7,44 +7,30 @@
 # (4) X11_INCLUDE to point at the directory containing "x11/xlib.h" etc.
 # (5) FLAGS should be changed to whatever options turn on maximum optimization
 #     in your compiler.
+PLATFORM = X11
+#PLATFORM = WIN32
+#PLATFORM = NO_GRAPHICS
 
-CC = gcc
-
-# Need X11 and math libraries.  -R option is sometimes needed under Solaris to
-# tell the linker where shared object libraries are.
-
-#LIB = -lX11 -lm -R/usr/openwin/lib
-LIB = -lX11 -lm 
-
-# Path to the X libraries.
-
-LIB_PATH = -L/usr/openwin/lib
-
-# Path to X11 include file on the EECG system.
-
-X11_INCLUDE = -I/usr/openwin/include
-
-# Flags for lots of warnings, debugging, and full optimization, 
-# respectively are listed below.
-
-#FLAGS = -Wall -Wpointer-arith -Wcast-qual -Wstrict-prototypes -O -D__USE_FIXED_PROTOTYPES__ -ansi -pedantic -Wmissing-prototypes -Wshadow -Wcast-align -D_POSIX_SOURCE
-#FLAGS = -g
-FLAGS = -O2
-
+HDR = graphics.h
+SRC = graphics.c example.c
 EXE = example
+FLAGS = -g -Wall -Wno-write-strings -D$(PLATFORM)
 
-OBJ = example.o graphics.o
+# Need to tell the linker to link to the X11 libraries.
+# WIN32 automatically links to the win32 API libraries (no need for flags)
+ifeq ($(PLATFORM),X11)
+   GRAPHICS_LIBS = -lX11
+endif
 
-SRC = example.c graphics.c
+$(EXE): graphics.o example.o
+	g++ $(FLAGS) graphics.o example.o $(GRAPHICS_LIBS) -o $(EXE)
 
-H = graphics.h
+graphics.o: graphics.c $(HDR)
+	g++ -c $(FLAGS) graphics.c
 
+example.o: example.c $(HDR)
+	g++ -c $(FLAGS) example.c
 
-$(EXE): $(OBJ)
-	$(CC) $(FLAGS) $(OBJ) -o $(EXE) $(LIB_PATH) $(LIB)
+clean:
+	rm $(EXE) *.o
 
-graphics.o: graphics.c $(H)
-	$(CC) -c $(FLAGS) $(X11_INCLUDE) graphics.c
-
-example.o: example.c $(H)
-	$(CC) -c $(FLAGS) example.c

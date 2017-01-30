@@ -11,6 +11,15 @@ enum line_types {SOLID, DASHED};
 typedef struct {float x; float y;} t_point; /* Used in calls to fillpoly */
 
 
+typedef struct {
+	float xmult, ymult;
+	float ps_xmult, ps_ymult;
+	float xleft, xright, ytop, ybot;
+	int top_width, top_height;
+} t_report;
+
+void report_structure(t_report*);
+
 /* Routine for X Windows Input.  act_on_button responds to buttons  *
  * being pressed in the graphics area.  drawscreen is the user's    *
  * routine that can redraw all the graphics.                        */

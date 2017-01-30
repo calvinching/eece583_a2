@@ -1450,6 +1450,18 @@ void update_message (char *msg) {
  draw_message ();
 }
 
+void report_structure(t_report *report) {
+	report->xmult = xmult;
+	report->ymult = ymult;
+	report->xleft = xleft;
+	report->xright = xright;
+	report->ytop = ytop;
+	report->ybot = ybot;
+	report->ps_xmult = ps_xmult;
+	report->ps_ymult = ps_ymult;
+	report->top_width = top_width;
+	report->top_height = top_height;
+}
 
 static void zoom_in (void (*drawscreen) (void)) {
 
