@@ -1,15 +1,19 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 #include <string.h>
 #include <time.h>
 #include <limits.h>
 #include "graphics.h"
+#include <sys/time.h>
 
-#define DEBUG
+//#define DEBUG
 #define SUCCESS 0
 #define ERROR -1
-#define MAX_NUM_SINKS 10
+#define MAX_NUM_SINKS 500
 #define NUM_INIT_ITERATIONS 50 // Number of times to run the random move to find the initial temperature
+#define BETA_TEMP_FACTOR 0.9
+#define EXIT_COUNT 500
 
 #define IS_MIN_AND_SET(x, y) if (x < y) y = x;
 #define IS_MAX_AND_SET(x, y) if (x > y) y = x;
@@ -36,8 +40,6 @@ typedef struct NET {
 
 NET *all_nets = NULL;
 
-
-
 typedef struct CELL {
     float x1;       // x-coordinate of the cell's top left corner
     float y1;       // y-coordinate of the cell's top left corner
@@ -57,9 +59,14 @@ typedef enum STATE {
     IDLE,
     INIT,
     ITERATE,
+    PENDING_EXIT,
+    EXIT,
 } STATE;
 
 STATE state = IDLE;
+bool done = false;
+int num_iterations = -1;
+int exit_counter = 0;
 
 int num_cells = -1;
 int num_cnx = -1;
@@ -71,12 +78,18 @@ float temp = 0.;
 void delay();
 void button_press(float x, float y);
 void proceed_button_func(void (*drawscreen_ptr) (void));
+void proceed_state_button_func(void (*drawscreen_ptr) (void));
 void debug_button_func(void (*drawscreen_ptr) (void));
 void drawscreen();
 int parse_file(char *file);
 void print_net(NET *net);
 void add_to_list(NET **head, NET *n);
 void init_grid();
+double random(double from, double to);
+float std_dev(int *vals, int size);
+bool take_move(int delta_cost);
+void find_random_cells(int *c1, int *c2);
+
 
 void init_grid() {
     t_report report;
@@ -120,7 +133,6 @@ int main(int argc, char **argv) {
         printf("Need input file\n");
         exit(1);
     }
-
     char *file = argv[1];
     printf("Input file: %s\n", file);
 
@@ -132,34 +144,58 @@ int main(int argc, char **argv) {
     init_grid();
 
     create_button("Window", "Go 1 Step", proceed_button_func);
+    create_button("Window", "Go 1 State", proceed_state_button_func);
     create_button("Window", "Debug", debug_button_func);
     drawscreen();
     event_loop(button_press, drawscreen);
     return 0;
 }
 
-int random(int from, int to) {
-    time_t t;
-    srand((unsigned) time(&t));
-    return (rand() % (to - from)) + from;
+
+double random(double from, double to) {
+    struct timeval t1;
+    gettimeofday(&t1, NULL);
+    srand(t1.tv_usec * t1.tv_sec);
+
+    return (rand() / (double)(RAND_MAX)) * abs(from - to) + from;
+}
+
+void randomize_array(int array[], int size) {
+    struct timeval t1;
+    gettimeofday(&t1, NULL);
+    srand(t1.tv_usec * t1.tv_sec);
+
+    for (int i = size - 1; i > 0; i--) {
+        int j = rand() % (i+1);
+        int tmp = array[j];
+        array[j] = array[i];
+        array[i] = tmp;
+    }
 }
 
 void random_placement() {
+    int total = num_cols * num_rows;
+    int array[total];
+    for (int i = 0; i < total; i++) {
+        array[i] = i;
+    }
+
+    randomize_array(array, total);
+
     for (int i = 0; i < num_cells; i++) {
-        while (true) {
-            // Get a random "col"
-            int col = random(0, num_cols);
-            int row = random(0, num_rows);
+        printf("array[%d]: %d\n", i, array[i]);
+        int col = array[i] / num_rows;
+        int row = array[i] % num_rows;
 
-            if (!grid[col][row].is_block) {
-                grid[col][row].is_block = true;
-                grid[col][row].block_num = i;
+        if (grid[col][row].is_block) {
+            printf("ERROR!!! (%d, %d)\n", col, row);
+        } else {
+            grid[col][row].is_block = true;
+            grid[col][row].block_num = i;
 
-                logic_cells[i].col = col;
-                logic_cells[i].row = row;
-                printf("Found (%d, %d) for logic block: %d\n", col, row, i);
-                break;
-            }
+            logic_cells[i].col = col;
+            logic_cells[i].row = row;
+            printf("Found (%d, %d) for logic block: %d\n", col, row, i);
         }
     }
 
@@ -167,14 +203,15 @@ void random_placement() {
 }
 
 void find_random_cells(int *c1, int *c2) {
-    *c1 = random(0, num_cells);
-    while (true) {
-        int tmp = random(0, num_cells);
-        if (tmp != *c1) {
-            *c2 = tmp;
-            break;
-        }
+    int array[num_cells];
+    for (int i = 0; i < num_cells; i++) {
+        array[i] = i;
     }
+
+    randomize_array(array, num_cells);
+
+    *c1 = array[0];
+    *c2 = array[1];
 #ifdef DEBUG
     printf("Found random logic cell: %d, %d\n", *c1, *c2);
 #endif
@@ -185,6 +222,11 @@ void swap_cells(LOGIC_CELL *c1, LOGIC_CELL *c2) {
     int c1_row = c1->row;
     int c2_col = c2->col;
     int c2_row = c2->row;
+
+    int c1_blk = grid[c1_col][c1_row].block_num;
+    int c2_blk = grid[c2_col][c2_row].block_num;
+    grid[c1_col][c1_row].block_num = c2_blk;
+    grid[c2_col][c2_row].block_num = c1_blk;
 
     c1->col = c2_col;
     c1->row = c2_row;
@@ -258,15 +300,34 @@ int calculate_cost() {
         cur_cost = (col_max - col_min) + (row_max - row_min);
         total_cost += cur_cost;
 #ifdef DEBUG
-        printf("Cost of net %d: (%d - %d) + (%d - %d) = %d\n", cur->net_id, col_max, col_min, row_max, row_min, cur_cost);
-        printf("Total cost: %d\n", total_cost);
+//        printf("Cost of net %d: (%d - %d) + (%d - %d) = %d\n", cur->net_id, col_max, col_min, row_max, row_min, cur_cost);
+//        printf("Total cost: %d\n", total_cost);
 #endif
+        cur = cur->next;
     }
     return total_cost;
 }
 
-float std_dev(int *vals) {
-    return 0;
+float std_dev(int *vals, int size) {
+    float mean, stddev;
+    float sum = 0;
+    for (int i = 0; i < size; i++) {
+        sum += (float)vals[i];
+    }
+    mean = sum / (float)size;
+#ifdef DEBUG
+    printf("Mean: %f\n", mean);
+#endif
+    sum = 0;
+    for (int i = 0; i < size; i++) {
+       sum += pow((float)vals[i] - mean, 2);
+    }
+    mean = sum / (float)size;
+    stddev = sqrt(mean);
+#ifdef DEBUG
+    printf("Std dev: %f\n", stddev);
+#endif
+    return stddev;
 }
 
 void run_init_temp() {
@@ -276,6 +337,8 @@ void run_init_temp() {
     int all_costs[NUM_INIT_ITERATIONS];
 
     for (int i = 0; i < NUM_INIT_ITERATIONS; i++) {
+        printf("Iteration: %d\n", i);
+
         // Find 2 random cells to swap
         find_random_cells(&c1, &c2);
         LOGIC_CELL *cell1 = &logic_cells[c1];
@@ -289,28 +352,159 @@ void run_init_temp() {
     }
 
     // Initial temp = 20 * std_dev(costs over the NUM_INIT_ITERATIONS moves
-    temp = 20 * std_dev(all_costs);
+    temp = 20 * std_dev(all_costs, NUM_INIT_ITERATIONS);
 
     printf("Initial temperature: %f\n", temp);
+
+    state = ITERATE;
 }
 
-void proceed_button_func(void (*drawscreen_ptr) (void)) {
-    printf("Button pressed\n");
+void update_temp() {
+    printf("Temperature: %f\n", temp);
+    temp = temp * BETA_TEMP_FACTOR;
+    printf("New temperature: %f\n", temp);
+}
 
+void run_placement() {
     switch (state) {
         case IDLE: {
             printf("State is IDLE\n");
             random_placement();
         } break;
         case INIT: {
+            printf("State is INIT\n");
             run_init_temp();
+            num_iterations = 10 * pow((double)num_cells, (double)(4.0/3.0));
+            printf("Number of iterations: %d\n", num_iterations);
+        } break;
+        case ITERATE: {
+            int cur_cost, prev_cost = -1;
+            for (int i = 0; i < num_iterations; i++) {
+                int c1, c2;
+                find_random_cells(&c1, &c2);
+                LOGIC_CELL *cell1 = &logic_cells[c1];
+                LOGIC_CELL *cell2 = &logic_cells[c2];
+
+                // Get previous cost
+                if (prev_cost == -1) {
+                    prev_cost = calculate_cost();
+                }
+
+                // Swap the two cells
+                swap_cells(cell1, cell2);
+
+                // Get the cost of the new placement
+                cur_cost = calculate_cost();
+
+                // Find the change in cost
+                int delta_cost = cur_cost - prev_cost;
+                printf("cur_cost: %d - prev_cost: %d = delta_cost: %d\n", cur_cost, prev_cost, delta_cost);
+                if (take_move(delta_cost)) {
+                    printf("Taking move in iteration %d\n", i);
+
+                    // Update cost
+                    prev_cost = cur_cost;
+
+                    // Reset the exit counter if we are taking a move
+                    exit_counter = 0;
+                } else {
+                    printf("***Not taking the move in iteration %d exit_counter: %d temp: %f\n", i, exit_counter, temp);
+                    // Undo the swap
+                    swap_cells(cell1, cell2);
+                    exit_counter++;
+                }
+
+                // Check to see if we need to update state (i.e. meet exit criteria)
+                if (exit_counter > EXIT_COUNT) {
+                    printf("We are exiting due to exit_counter. Setting state to PENDING_EXIT\n");
+                    printf("Cost: %d Temp: %f\n", prev_cost, temp);
+                    state = PENDING_EXIT;
+                    break;
+                }
+            }
+
+            if (state != PENDING_EXIT) {
+                printf("Finished one iteration loop for temp: %f. Cost: %d\n", temp, cur_cost);
+                // Update temp
+                update_temp();
+            }
+        } break;
+        case PENDING_EXIT: {
+            // Before we quit, let's make one more swap and see if we improve
+            int c1, c2;
+            find_random_cells(&c1, &c2);
+            LOGIC_CELL *cell1 = &logic_cells[c1];
+            LOGIC_CELL *cell2 = &logic_cells[c2];
+
+            // Get previous cost
+            int prev_cost = calculate_cost();
+
+            // Swap the two cells
+            swap_cells(cell1, cell2);
+
+            // Get the cost of the new placement
+            int cur_cost = calculate_cost();
+
+            // Find the change in cost
+            int delta_cost = cur_cost - prev_cost;
+
+            printf("%d - %d = delta_cost %d\n", cur_cost, prev_cost, delta_cost);
+
+            if (delta_cost < 0) {
+                // We are still improving so we should keep iterating
+                printf("Resetting state to ITERATE\n");
+                state = ITERATE;
+            } else {
+                state = EXIT;
+                printf("Final cost: %d Final Temp: %f\n", prev_cost, temp);
+                debug_button_func(NULL);
+            }
+        } break;
+        case EXIT: {
+            printf("We are done!\n");
+            done = true;
         } break;
         default: {
             printf("ERROR: unknown state!\n");
         } break;
     }
+}
 
+void proceed_button_func(void (*drawscreen_ptr) (void)) {
+    run_placement();
     drawscreen();
+}
+
+void proceed_state_button_func(void (*drawscreen_ptr) (void)) {
+    STATE cur_state = state;
+    while (cur_state == state && !done) {
+        run_placement();
+        drawscreen();
+        delay();
+    }
+
+    if (done)
+        printf("Nothing else to do!\n");
+}
+
+
+bool take_move(int delta_cost) {
+    // If cost is less than 0, then we take move for sure
+    if (delta_cost < 0) {
+        return true;
+    }
+    // If no cost change, just ignore it.
+    if (delta_cost == 0) {
+        return false;
+    }
+
+    // Get a random number between 0 and 1
+    double rand = random(0, 1);
+
+    // We take move if rand < e^(-delta_cost/temp)
+    double e = exp((double)((delta_cost * -1.0)/(double)temp));
+    printf("rand %f < exp: %f ?\n", rand, e);
+    return (rand < e);
 }
 
 void print_net(NET *net) {
@@ -357,9 +551,13 @@ int parse_file(char *file) {
 
             int line_num = 0;
             while ((read = getline(&line, &len, fp)) != -1) {
+                if (strlen(line) < 4) {
+                    continue;
+                }
 #ifdef DEBUG
-                printf("parse_file[%d]: %s", line_num, line);
+                printf("Parse_file[%d] (%d): %s (%d)", line_num, strlen(line), line);
 #endif
+
                 // First line contains # cells, # cnx btw cells, # rows, # cols
                 if (line_num == 0) {
                     const char delim[2] = " ";
@@ -443,8 +641,6 @@ void draw_grid() {
             char text[10] = "";
             if (grid[col][row].is_block) {
                 // Draw source and sinks
-                setcolor(DARKGREY + grid[col][row].block_num);
-                fillrect(grid[col][row].x1, grid[col][row].y1, grid[col][row].x2, grid[col][row].y2);
                 setcolor(BLACK);
                 drawrect(grid[col][row].x1, grid[col][row].y1, grid[col][row].x2, grid[col][row].y2);
                 sprintf(text, "%d", grid[col][row].block_num);
@@ -452,16 +648,13 @@ void draw_grid() {
             } else {
                 setcolor(BLACK);
                 drawrect(grid[col][row].x1, grid[col][row].y1, grid[col][row].x2, grid[col][row].y2);
-#ifdef DEBUG
-                sprintf(text, "(%d, %d)", col, row);
-                drawtext(grid[col][row].text_x, grid[col][row].text_y, text, 150.);
-#endif
             }
         }
     }
 }
 
 void drawscreen() {
+    clearscreen();
     draw_grid();
 }
 
